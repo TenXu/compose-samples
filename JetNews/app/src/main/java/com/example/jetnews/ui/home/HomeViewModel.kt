@@ -37,6 +37,7 @@ import java.util.UUID
  */
 data class HomeUiState(
     val posts: List<Post> = emptyList(),
+    val selectedPostId: String? = null, // TODO back selectedPostId in a SavedStateHandle
     val favorites: Set<String> = emptySet(),
     val loading: Boolean = false,
     val errorMessages: List<ErrorMessage> = emptyList()
@@ -101,6 +102,13 @@ class HomeViewModel(
         viewModelScope.launch {
             postsRepository.toggleFavorite(postId)
         }
+    }
+
+    /**
+     * Selects the given article to view more information about it.
+     */
+    fun selectArticle(postId: String) {
+        _uiState.update { it.copy(selectedPostId = postId) }
     }
 
     /**

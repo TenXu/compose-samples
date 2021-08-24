@@ -19,13 +19,17 @@ package com.example.jetnews.ui.home
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.CircularProgressIndicator
 import androidx.compose.material.Divider
 import androidx.compose.material.ExperimentalMaterialApi
@@ -42,7 +46,9 @@ import androidx.compose.material.rememberScaffoldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -57,9 +63,9 @@ import com.example.jetnews.R
 import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.model.Post
+import com.example.jetnews.ui.article.PostContent
 import com.example.jetnews.ui.components.InsetAwareTopAppBar
 import com.example.jetnews.ui.theme.JetnewsTheme
-import com.example.jetnews.utils.supportWideScreen
 import com.google.accompanist.insets.LocalWindowInsets
 import com.google.accompanist.insets.rememberInsetsPaddingValues
 import com.google.accompanist.insets.systemBarsPadding
@@ -90,6 +96,7 @@ fun HomeScreen(
     HomeScreen(
         uiState = uiState,
         onToggleFavorite = { homeViewModel.toggleFavourite(it) },
+        onSelectPost = { homeViewModel.selectArticle(it) },
         onRefreshPosts = { homeViewModel.refreshPosts() },
         onErrorDismiss = { homeViewModel.errorShown(it) },
         navigateToArticle = navigateToArticle,
@@ -116,6 +123,7 @@ fun HomeScreen(
 fun HomeScreen(
     uiState: HomeUiState,
     onToggleFavorite: (String) -> Unit,
+    onSelectPost: (String) -> Unit,
     onRefreshPosts: () -> Unit,
     onErrorDismiss: (Long) -> Unit,
     navigateToArticle: (String) -> Unit,
@@ -141,25 +149,33 @@ fun HomeScreen(
         }
     ) { innerPadding ->
         val modifier = Modifier.padding(innerPadding)
-        LoadingContent(
-            empty = uiState.initialLoad,
-            emptyContent = { FullScreenLoading() },
-            loading = uiState.loading,
-            onRefresh = onRefreshPosts,
-            content = {
-                HomeScreenErrorAndContent(
-                    posts = uiState.posts,
-                    isShowingErrors = uiState.errorMessages.isNotEmpty(),
-                    onRefresh = {
-                        onRefreshPosts()
-                    },
-                    navigateToArticle = navigateToArticle,
-                    favorites = uiState.favorites,
-                    onToggleFavorite = onToggleFavorite,
-                    modifier = modifier.supportWideScreen()
-                )
-            }
-        )
+
+        BoxWithConstraints {
+            val useListDetail = maxWidth > 624.dp
+
+            LoadingContent(
+                empty = uiState.initialLoad,
+                emptyContent = { FullScreenLoading() },
+                loading = uiState.loading,
+                onRefresh = onRefreshPosts,
+                content = {
+                    HomeScreenErrorAndContent(
+                        posts = uiState.posts,
+                        selectedPostId = uiState.selectedPostId,
+                        useListDetail = useListDetail,
+                        isShowingErrors = uiState.errorMessages.isNotEmpty(),
+                        onRefresh = {
+                            onRefreshPosts()
+                        },
+                        navigateToArticle = navigateToArticle,
+                        favorites = uiState.favorites,
+                        onToggleFavorite = onToggleFavorite,
+                        onSelectPost = onSelectPost,
+                        modifier = modifier
+                    )
+                }
+            )
+        }
     }
 
     // Process one error message at a time and show them as Snackbars in the UI
@@ -235,15 +251,34 @@ private fun LoadingContent(
 @Composable
 private fun HomeScreenErrorAndContent(
     posts: List<Post>,
+    selectedPostId: String?,
+    useListDetail: Boolean,
     isShowingErrors: Boolean,
     favorites: Set<String>,
     onRefresh: () -> Unit,
     navigateToArticle: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onSelectPost: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (posts.isNotEmpty()) {
-        PostList(posts, navigateToArticle, favorites, onToggleFavorite, modifier)
+        val detailPostId by derivedStateOf {
+            // TODO: Restructure the posts data to remove the magic 3 as a default
+            (posts.find { it.id == selectedPostId } ?: posts[3]).id
+        }
+
+        if (useListDetail) {
+            PostListWithDetail(
+                posts = posts,
+                detailPostId = detailPostId,
+                selectArticle = onSelectPost,
+                favorites = favorites,
+                onToggleFavorite = onToggleFavorite,
+                modifier = modifier
+            )
+        } else {
+            PostList(posts, navigateToArticle, favorites, onToggleFavorite, modifier)
+        }
     } else if (!isShowingErrors) {
         // if there are no posts, and no error, let the user refresh manually
         TextButton(onClick = onRefresh, modifier.fillMaxSize()) {
@@ -255,20 +290,57 @@ private fun HomeScreenErrorAndContent(
     }
 }
 
+@Composable
+private fun PostListWithDetail(
+    posts: List<Post>,
+    detailPostId: String,
+    selectArticle: (postId: String) -> Unit,
+    favorites: Set<String>,
+    onToggleFavorite: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row {
+        PostList(
+            posts = posts,
+            onArticleTapped = selectArticle,
+            favorites = favorites,
+            onToggleFavorite = onToggleFavorite,
+            modifier = modifier.width(334.dp)
+        )
+        posts.forEach { post ->
+            // Key against the post id to avoid sharing state between different posts
+            key(post.id) {
+                // Remember the list state outside of the conditional to save list state while viewing
+                // other articles
+                val state = rememberLazyListState()
+
+                // Only actually show the selected post
+                // Assuming ids are unique, there should be exactly one PostContent displayed
+                if (post.id == detailPostId) {
+                    PostContent(
+                        post = post,
+                        modifier = modifier.fillMaxSize(),
+                        state = state,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
  * Display a list of posts.
  *
- * When a post is clicked on, [navigateToArticle] will be called to navigate to the detail screen
- * for that post.
+ * When a post is clicked on, [onArticleTapped] will be called.
  *
  * @param posts (state) the list to display
- * @param navigateToArticle (event) request navigation to Article screen
+ * @param onArticleTapped (event) request navigation to Article screen
  * @param modifier modifier for the root element
  */
 @Composable
 private fun PostList(
     posts: List<Post>,
-    navigateToArticle: (postId: String) -> Unit,
+    onArticleTapped: (postId: String) -> Unit,
     favorites: Set<String>,
     onToggleFavorite: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -285,10 +357,10 @@ private fun PostList(
             applyTop = false
         )
     ) {
-        item { PostListTopSection(postTop, navigateToArticle) }
-        item { PostListSimpleSection(postsSimple, navigateToArticle, favorites, onToggleFavorite) }
-        item { PostListPopularSection(postsPopular, navigateToArticle) }
-        item { PostListHistorySection(postsHistory, navigateToArticle) }
+        item { PostListTopSection(postTop, onArticleTapped) }
+        item { PostListSimpleSection(postsSimple, onArticleTapped, favorites, onToggleFavorite) }
+        item { PostListPopularSection(postsPopular, onArticleTapped) }
+        item { PostListHistorySection(postsHistory, onArticleTapped) }
     }
 }
 
@@ -426,6 +498,7 @@ fun PreviewHomeScreen() {
         HomeScreen(
             uiState = HomeUiState(posts = posts),
             onToggleFavorite = { /*TODO*/ },
+            onSelectPost = { /*TODO*/ },
             onRefreshPosts = { /*TODO*/ },
             onErrorDismiss = { /*TODO*/ },
             navigateToArticle = { /*TODO*/ },
