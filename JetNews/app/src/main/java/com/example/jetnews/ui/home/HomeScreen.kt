@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,6 +54,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -71,6 +74,8 @@ import com.google.accompanist.insets.rememberInsetsPaddingValues
 import com.google.accompanist.insets.systemBarsPadding
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -99,6 +104,8 @@ fun HomeScreen(
         onSelectPost = { homeViewModel.selectArticle(it) },
         onRefreshPosts = { homeViewModel.refreshPosts() },
         onErrorDismiss = { homeViewModel.errorShown(it) },
+        onInteractWithList = { homeViewModel.interactedWithList() },
+        onInteractWithDetail = { homeViewModel.interactedWithDetail() },
         navigateToArticle = navigateToArticle,
         openDrawer = openDrawer,
         scaffoldState = scaffoldState
@@ -126,6 +133,8 @@ fun HomeScreen(
     onSelectPost: (String) -> Unit,
     onRefreshPosts: () -> Unit,
     onErrorDismiss: (Long) -> Unit,
+    onInteractWithList: () -> Unit,
+    onInteractWithDetail: () -> Unit,
     navigateToArticle: (String) -> Unit,
     openDrawer: () -> Unit,
     scaffoldState: ScaffoldState
@@ -163,6 +172,7 @@ fun HomeScreen(
                         posts = uiState.posts,
                         selectedPostId = uiState.selectedPostId,
                         useListDetail = useListDetail,
+                        lastInteractedWithList = uiState.lastInteractedWithList,
                         isShowingErrors = uiState.errorMessages.isNotEmpty(),
                         onRefresh = {
                             onRefreshPosts()
@@ -171,6 +181,8 @@ fun HomeScreen(
                         favorites = uiState.favorites,
                         onToggleFavorite = onToggleFavorite,
                         onSelectPost = onSelectPost,
+                        onInteractWithList = onInteractWithList,
+                        onInteractWithDetail = onInteractWithDetail,
                         modifier = modifier
                     )
                 }
@@ -253,31 +265,70 @@ private fun HomeScreenErrorAndContent(
     posts: List<Post>,
     selectedPostId: String?,
     useListDetail: Boolean,
+    lastInteractedWithList: Boolean,
     isShowingErrors: Boolean,
     favorites: Set<String>,
     onRefresh: () -> Unit,
     navigateToArticle: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onSelectPost: (String) -> Unit,
+    onInteractWithList: () -> Unit,
+    onInteractWithDetail: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Construct the lazy list states for the list and the details outside of deciding which one to show.
+    // This allows the associated state to survive beyond that decision, and therefore we get to preserve the scroll
+    // throughout any changes to the content.
+    val listLazyListState = rememberLazyListState()
+    val detailLazyListsStates = posts.associate { post ->
+        key(post.id) {
+            post.id to rememberLazyListState()
+        }
+    }
+
     if (posts.isNotEmpty()) {
-        val detailPostId by derivedStateOf {
+        val detailPost by derivedStateOf {
             // TODO: Restructure the posts data to remove the magic 3 as a default
-            (posts.find { it.id == selectedPostId } ?: posts[3]).id
+            posts.find { it.id == selectedPostId } ?: posts[3]
         }
 
-        if (useListDetail) {
-            PostListWithDetail(
-                posts = posts,
-                detailPostId = detailPostId,
-                selectArticle = onSelectPost,
-                favorites = favorites,
-                onToggleFavorite = onToggleFavorite,
-                modifier = modifier
-            )
-        } else {
-            PostList(posts, navigateToArticle, favorites, onToggleFavorite, modifier)
+        // Get the lazy list state for this detail view
+        val detailLazyListState by derivedStateOf {
+            detailLazyListsStates.getValue(detailPost.id)
+        }
+
+        when {
+            useListDetail -> {
+                PostListWithDetail(
+                    posts = posts,
+                    detailPost = detailPost,
+                    selectArticle = onSelectPost,
+                    favorites = favorites,
+                    onToggleFavorite = onToggleFavorite,
+                    onInteractWithList = onInteractWithList,
+                    onInteractWithDetail = onInteractWithDetail,
+                    listLazyListState = listLazyListState,
+                    detailLazyListState = detailLazyListState,
+                    modifier = modifier,
+                )
+            }
+            lastInteractedWithList -> {
+                PostList(
+                    posts = posts,
+                    onArticleTapped = navigateToArticle,
+                    favorites = favorites,
+                    onToggleFavorite = onToggleFavorite,
+                    modifier = modifier,
+                    state = listLazyListState,
+                )
+            }
+            else -> {
+                PostContent(
+                    post = detailPost,
+                    modifier = modifier,
+                    state = detailLazyListState
+                )
+            }
         }
     } else if (!isShowingErrors) {
         // if there are no posts, and no error, let the user refresh manually
@@ -293,11 +344,15 @@ private fun HomeScreenErrorAndContent(
 @Composable
 private fun PostListWithDetail(
     posts: List<Post>,
-    detailPostId: String,
+    detailPost: Post,
     selectArticle: (postId: String) -> Unit,
     favorites: Set<String>,
     onToggleFavorite: (String) -> Unit,
-    modifier: Modifier = Modifier
+    onInteractWithList: () -> Unit,
+    onInteractWithDetail: () -> Unit,
+    listLazyListState: LazyListState,
+    detailLazyListState: LazyListState,
+    modifier: Modifier = Modifier,
 ) {
     Row {
         PostList(
@@ -305,25 +360,34 @@ private fun PostListWithDetail(
             onArticleTapped = selectArticle,
             favorites = favorites,
             onToggleFavorite = onToggleFavorite,
-            modifier = modifier.width(334.dp)
+            modifier = modifier
+                .width(334.dp)
+                .pointerInput(Unit) {
+                    while (currentCoroutineContext().isActive) {
+                        awaitPointerEventScope {
+                            awaitPointerEvent(PointerEventPass.Initial)
+                            onInteractWithList()
+                        }
+                    }
+                },
+            state = listLazyListState
         )
-        posts.forEach { post ->
-            // Key against the post id to avoid sharing state between different posts
-            key(post.id) {
-                // Remember the list state outside of the conditional to save list state while viewing
-                // other articles
-                val state = rememberLazyListState()
-
-                // Only actually show the selected post
-                // Assuming ids are unique, there should be exactly one PostContent displayed
-                if (post.id == detailPostId) {
-                    PostContent(
-                        post = post,
-                        modifier = modifier.fillMaxSize(),
-                        state = state,
-                    )
-                }
-            }
+        key(detailPost.id) {
+            // Key against the post id to avoid sharing any state between different posts
+            PostContent(
+                post = detailPost,
+                modifier = modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        while (currentCoroutineContext().isActive) {
+                            awaitPointerEventScope {
+                                awaitPointerEvent(PointerEventPass.Initial)
+                                onInteractWithDetail()
+                            }
+                        }
+                    },
+                state = detailLazyListState
+            )
         }
     }
 }
@@ -343,7 +407,8 @@ private fun PostList(
     onArticleTapped: (postId: String) -> Unit,
     favorites: Set<String>,
     onToggleFavorite: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    state: LazyListState = rememberLazyListState(),
 ) {
     val postTop = posts[3]
     val postsSimple = posts.subList(0, 2)
@@ -352,6 +417,7 @@ private fun PostList(
 
     LazyColumn(
         modifier = modifier,
+        state = state,
         contentPadding = rememberInsetsPaddingValues(
             insets = LocalWindowInsets.current.systemBars,
             applyTop = false
@@ -501,6 +567,8 @@ fun PreviewHomeScreen() {
             onSelectPost = { /*TODO*/ },
             onRefreshPosts = { /*TODO*/ },
             onErrorDismiss = { /*TODO*/ },
+            onInteractWithList = { /*TODO*/ },
+            onInteractWithDetail = { /*TODO*/ },
             navigateToArticle = { /*TODO*/ },
             openDrawer = { /*TODO*/ },
             scaffoldState = rememberScaffoldState()

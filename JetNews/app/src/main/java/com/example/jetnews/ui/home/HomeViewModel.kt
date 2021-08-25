@@ -38,6 +38,7 @@ import java.util.UUID
 data class HomeUiState(
     val posts: List<Post> = emptyList(),
     val selectedPostId: String? = null, // TODO back selectedPostId in a SavedStateHandle
+    val lastInteractedWithList: Boolean = true,
     val favorites: Set<String> = emptySet(),
     val loading: Boolean = false,
     val errorMessages: List<ErrorMessage> = emptyList()
@@ -118,6 +119,18 @@ class HomeViewModel(
         _uiState.update { currentUiState ->
             val errorMessages = currentUiState.errorMessages.filterNot { it.id == errorId }
             currentUiState.copy(errorMessages = errorMessages)
+        }
+    }
+
+    fun interactedWithList() {
+        _uiState.update {
+            it.copy(lastInteractedWithList = true)
+        }
+    }
+
+    fun interactedWithDetail() {
+        _uiState.update {
+            it.copy(lastInteractedWithList = false)
         }
     }
 
