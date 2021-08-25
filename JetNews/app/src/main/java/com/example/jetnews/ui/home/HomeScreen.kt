@@ -17,6 +17,7 @@
 package com.example.jetnews.ui.home
 
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -61,6 +62,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.jetnews.R
 import com.example.jetnews.data.Result
@@ -160,8 +162,6 @@ fun HomeScreen(
         val modifier = Modifier.padding(innerPadding)
 
         BoxWithConstraints {
-            val useListDetail = maxWidth > 624.dp
-
             LoadingContent(
                 empty = uiState.initialLoad,
                 emptyContent = { FullScreenLoading() },
@@ -171,7 +171,7 @@ fun HomeScreen(
                     HomeScreenErrorAndContent(
                         posts = uiState.posts,
                         selectedPostId = uiState.selectedPostId,
-                        useListDetail = useListDetail,
+                        maxWidth = maxWidth,
                         lastInteractedWithList = uiState.lastInteractedWithList,
                         isShowingErrors = uiState.errorMessages.isNotEmpty(),
                         onRefresh = {
@@ -264,7 +264,7 @@ private fun LoadingContent(
 private fun HomeScreenErrorAndContent(
     posts: List<Post>,
     selectedPostId: String?,
-    useListDetail: Boolean,
+    maxWidth: Dp,
     lastInteractedWithList: Boolean,
     isShowingErrors: Boolean,
     favorites: Set<String>,
@@ -292,42 +292,54 @@ private fun HomeScreenErrorAndContent(
             posts.find { it.id == selectedPostId } ?: posts[3]
         }
 
-        // Get the lazy list state for this detail view
-        val detailLazyListState by derivedStateOf {
-            detailLazyListsStates.getValue(detailPost.id)
-        }
+        val useListDetail = maxWidth > 624.dp
 
-        when {
-            useListDetail -> {
-                PostListWithDetail(
-                    posts = posts,
-                    detailPost = detailPost,
-                    selectArticle = onSelectPost,
-                    favorites = favorites,
-                    onToggleFavorite = onToggleFavorite,
-                    onInteractWithList = onInteractWithList,
-                    onInteractWithDetail = onInteractWithDetail,
-                    listLazyListState = listLazyListState,
-                    detailLazyListState = detailLazyListState,
-                    modifier = modifier,
-                )
-            }
-            lastInteractedWithList -> {
+        Row {
+            if (useListDetail || lastInteractedWithList) {
                 PostList(
                     posts = posts,
-                    onArticleTapped = navigateToArticle,
+                    onArticleTapped = if (useListDetail) onSelectPost else navigateToArticle,
                     favorites = favorites,
                     onToggleFavorite = onToggleFavorite,
-                    modifier = modifier,
-                    state = listLazyListState,
+                    modifier = modifier
+                        .width(if (useListDetail) 334.dp else maxWidth)
+                        .pointerInput(Unit) {
+                            while (currentCoroutineContext().isActive) {
+                                awaitPointerEventScope {
+                                    awaitPointerEvent(PointerEventPass.Initial)
+                                    onInteractWithList()
+                                }
+                            }
+                        },
+                    state = listLazyListState
                 )
             }
-            else -> {
-                PostContent(
-                    post = detailPost,
-                    modifier = modifier,
-                    state = detailLazyListState
-                )
+            if (useListDetail || !lastInteractedWithList) {
+                // Crossfade between different detail posts
+                Crossfade(targetState = detailPost) { detailPost ->
+                    // Get the lazy list state for this detail view
+                    val detailLazyListState by derivedStateOf {
+                        detailLazyListsStates.getValue(detailPost.id)
+                    }
+
+                    // Key against the post id to avoid sharing any state between different posts
+                    key(detailPost.id) {
+                        PostContent(
+                            post = detailPost,
+                            modifier = modifier
+                                .fillMaxSize()
+                                .pointerInput(Unit) {
+                                    while (currentCoroutineContext().isActive) {
+                                        awaitPointerEventScope {
+                                            awaitPointerEvent(PointerEventPass.Initial)
+                                            onInteractWithDetail()
+                                        }
+                                    }
+                                },
+                            state = detailLazyListState
+                        )
+                    }
+                }
             }
         }
     } else if (!isShowingErrors) {
@@ -338,57 +350,6 @@ private fun HomeScreenErrorAndContent(
     } else {
         // there's currently an error showing, don't show any content
         Box(modifier.fillMaxSize()) { /* empty screen */ }
-    }
-}
-
-@Composable
-private fun PostListWithDetail(
-    posts: List<Post>,
-    detailPost: Post,
-    selectArticle: (postId: String) -> Unit,
-    favorites: Set<String>,
-    onToggleFavorite: (String) -> Unit,
-    onInteractWithList: () -> Unit,
-    onInteractWithDetail: () -> Unit,
-    listLazyListState: LazyListState,
-    detailLazyListState: LazyListState,
-    modifier: Modifier = Modifier,
-) {
-    Row {
-        PostList(
-            posts = posts,
-            onArticleTapped = selectArticle,
-            favorites = favorites,
-            onToggleFavorite = onToggleFavorite,
-            modifier = modifier
-                .width(334.dp)
-                .pointerInput(Unit) {
-                    while (currentCoroutineContext().isActive) {
-                        awaitPointerEventScope {
-                            awaitPointerEvent(PointerEventPass.Initial)
-                            onInteractWithList()
-                        }
-                    }
-                },
-            state = listLazyListState
-        )
-        key(detailPost.id) {
-            // Key against the post id to avoid sharing any state between different posts
-            PostContent(
-                post = detailPost,
-                modifier = modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        while (currentCoroutineContext().isActive) {
-                            awaitPointerEventScope {
-                                awaitPointerEvent(PointerEventPass.Initial)
-                                onInteractWithDetail()
-                            }
-                        }
-                    },
-                state = detailLazyListState
-            )
-        }
     }
 }
 
