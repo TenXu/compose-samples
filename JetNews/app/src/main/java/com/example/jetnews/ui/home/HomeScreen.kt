@@ -17,6 +17,7 @@
 package com.example.jetnews.ui.home
 
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -354,6 +355,13 @@ private fun HomeScreenErrorAndContent(
                             ),
                             state = detailLazyListState
                         )
+                    }
+                }
+
+                // If we are just showing the detail, have a back press switch to the list.
+                if (!useListDetail) {
+                    BackHandler {
+                        onInteractWithList()
                     }
                 }
             }

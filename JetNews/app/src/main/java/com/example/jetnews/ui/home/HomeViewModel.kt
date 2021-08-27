@@ -110,6 +110,9 @@ class HomeViewModel(
      */
     fun selectArticle(postId: String) {
         _uiState.update { it.copy(selectedPostId = postId) }
+
+        // Treat selecting a detail as interacting with it
+        interactedWithDetail()
     }
 
     /**
