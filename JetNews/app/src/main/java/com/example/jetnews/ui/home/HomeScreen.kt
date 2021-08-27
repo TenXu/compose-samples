@@ -69,6 +69,7 @@ import com.example.jetnews.R
 import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.model.Post
+import com.example.jetnews.ui.article.ArticleScreen
 import com.example.jetnews.ui.article.PostContent
 import com.example.jetnews.ui.components.InsetAwareTopAppBar
 import com.example.jetnews.ui.theme.JetnewsTheme
@@ -87,14 +88,14 @@ import kotlinx.coroutines.runBlocking
  * Note: AAC ViewModels don't work with Compose Previews currently.
  *
  * @param homeViewModel ViewModel that handles the business logic of this screen
- * @param navigateToArticle (event) request navigation to Article screen
+ * @param navigateToExpandedArticle (event) request navigation to Article screen
  * @param openDrawer (event) request opening the app drawer
  * @param scaffoldState (state) state for the [Scaffold] component on this screen
  */
 @Composable
 fun HomeScreen(
     homeViewModel: HomeViewModel,
-    navigateToArticle: (String) -> Unit,
+    navigateToExpandedArticle: (String) -> Unit,
     openDrawer: () -> Unit,
     scaffoldState: ScaffoldState = rememberScaffoldState()
 ) {
@@ -108,10 +109,10 @@ fun HomeScreen(
         onRefreshPosts = { homeViewModel.refreshPosts() },
         onErrorDismiss = { homeViewModel.errorShown(it) },
         onInteractWithList = { homeViewModel.interactedWithList() },
-        onInteractWithDetail = { homeViewModel.interactedWithDetail() },
-        navigateToArticle = navigateToArticle,
+        onInteractWithDetail = homeViewModel::interactedWithDetail,
+        navigateToExpandedArticle = navigateToExpandedArticle,
         openDrawer = openDrawer,
-        scaffoldState = scaffoldState
+        scaffoldState = scaffoldState,
     )
 }
 
@@ -124,7 +125,7 @@ fun HomeScreen(
  * @param onToggleFavorite (event) toggles favorite for a post
  * @param onRefreshPosts (event) request a refresh of posts
  * @param onErrorDismiss (event) error message was shown
- * @param navigateToArticle (event) request navigation to Article screen
+ * @param navigateToExpandedArticle (event) request navigation to Article screen
  * @param openDrawer (event) request opening the app drawer
  * @param scaffoldState (state) state for the [Scaffold] component on this screen
  */
@@ -137,89 +138,131 @@ fun HomeScreen(
     onRefreshPosts: () -> Unit,
     onErrorDismiss: (Long) -> Unit,
     onInteractWithList: () -> Unit,
-    onInteractWithDetail: () -> Unit,
-    navigateToArticle: (String) -> Unit,
+    onInteractWithDetail: (String) -> Unit,
+    navigateToExpandedArticle: (String) -> Unit,
     openDrawer: () -> Unit,
     scaffoldState: ScaffoldState
 ) {
-    Scaffold(
-        scaffoldState = scaffoldState,
-        snackbarHost = { SnackbarHost(hostState = it, modifier = Modifier.systemBarsPadding()) },
-        topBar = {
-            val title = stringResource(id = R.string.app_name)
-            InsetAwareTopAppBar(
-                title = { Text(text = title) },
-                navigationIcon = {
-                    IconButton(onClick = openDrawer) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_jetnews_logo),
-                            contentDescription = stringResource(R.string.cd_open_navigation_drawer)
-                        )
-                    }
-                }
-            )
-        },
-    ) { innerPadding ->
-        val modifier = Modifier.padding(innerPadding)
-
-        BoxWithConstraints {
-            val useListDetail = maxWidth > 624.dp
-
-            LoadingContent(
-                empty = uiState.initialLoad,
-                emptyContent = { FullScreenLoading() },
-                loading = uiState.loading,
-                onRefresh = onRefreshPosts,
-                content = {
-                    HomeScreenErrorAndContent(
-                        posts = uiState.posts,
-                        selectedPostId = uiState.selectedPostId,
-                        useListDetail = useListDetail,
-                        lastInteractedWithList = uiState.lastInteractedWithList,
-                        isShowingErrors = uiState.errorMessages.isNotEmpty(),
-                        onRefresh = {
-                            onRefreshPosts()
-                        },
-                        navigateToArticle = navigateToArticle,
-                        favorites = uiState.favorites,
-                        onToggleFavorite = onToggleFavorite,
-                        onSelectPost = onSelectPost,
-                        onInteractWithList = onInteractWithList,
-                        onInteractWithDetail = onInteractWithDetail,
-                        modifier = modifier
-                    )
-                }
-            )
+    // Construct the lazy list states for the list and the details outside of deciding which one to show.
+    // This allows the associated state to survive beyond that decision, and therefore we get to preserve the scroll
+    // throughout any changes to the content.
+    val listLazyListState = rememberLazyListState()
+    val detailLazyListStates = uiState.posts.associate { post ->
+        key(post.id) {
+            post.id to rememberLazyListState()
         }
     }
 
-    // Process one error message at a time and show them as Snackbars in the UI
-    if (uiState.errorMessages.isNotEmpty()) {
-        // Remember the errorMessage to display on the screen
-        val errorMessage = remember(uiState) { uiState.errorMessages[0] }
+    BoxWithConstraints {
+        val useListDetail = maxWidth > 624.dp
 
-        // Get the text to show on the message from resources
-        val errorMessageText: String = stringResource(errorMessage.messageId)
-        val retryMessageText = stringResource(id = R.string.retry)
+        if (useListDetail || uiState.lastInteractedWithList) {
+            Scaffold(
+                scaffoldState = scaffoldState,
+                snackbarHost = { SnackbarHost(hostState = it, modifier = Modifier.systemBarsPadding()) },
+                topBar = {
+                    val title = stringResource(id = R.string.app_name)
+                    InsetAwareTopAppBar(
+                        title = { Text(text = title) },
+                        navigationIcon = {
+                            IconButton(onClick = openDrawer) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_jetnews_logo),
+                                    contentDescription = stringResource(R.string.cd_open_navigation_drawer)
+                                )
+                            }
+                        }
+                    )
+                },
+            ) { innerPadding ->
+                val modifier = Modifier.padding(innerPadding)
 
-        // If onRefreshPosts or onErrorDismiss change while the LaunchedEffect is running,
-        // don't restart the effect and use the latest lambda values.
-        val onRefreshPostsState by rememberUpdatedState(onRefreshPosts)
-        val onErrorDismissState by rememberUpdatedState(onErrorDismiss)
-
-        // Effect running in a coroutine that displays the Snackbar on the screen
-        // If there's a change to errorMessageText, retryMessageText or scaffoldState,
-        // the previous effect will be cancelled and a new one will start with the new values
-        LaunchedEffect(errorMessageText, retryMessageText, scaffoldState) {
-            val snackbarResult = scaffoldState.snackbarHostState.showSnackbar(
-                message = errorMessageText,
-                actionLabel = retryMessageText
-            )
-            if (snackbarResult == SnackbarResult.ActionPerformed) {
-                onRefreshPostsState()
+                LoadingContent(
+                    empty = uiState.initialLoad,
+                    emptyContent = { FullScreenLoading() },
+                    loading = uiState.loading,
+                    onRefresh = onRefreshPosts,
+                    content = {
+                        HomeScreenErrorAndContent(
+                            posts = uiState.posts,
+                            selectedPostId = uiState.selectedPostId,
+                            useListDetail = useListDetail,
+                            lastInteractedWithList = uiState.lastInteractedWithList,
+                            isShowingErrors = uiState.errorMessages.isNotEmpty(),
+                            onRefresh = {
+                                onRefreshPosts()
+                            },
+                            navigateToExpandedArticle = navigateToExpandedArticle,
+                            favorites = uiState.favorites,
+                            onToggleFavorite = onToggleFavorite,
+                            onSelectPost = onSelectPost,
+                            onInteractWithList = onInteractWithList,
+                            onInteractWithDetail = onInteractWithDetail,
+                            listLazyListState = listLazyListState,
+                            detailLazyListStates = detailLazyListStates,
+                            modifier = modifier
+                        )
+                    }
+                )
             }
-            // Once the message is displayed and dismissed, notify the ViewModel
-            onErrorDismissState(errorMessage.id)
+
+            // Process one error message at a time and show them as Snackbars in the UI
+            if (uiState.errorMessages.isNotEmpty()) {
+                // Remember the errorMessage to display on the screen
+                val errorMessage = remember(uiState) { uiState.errorMessages[0] }
+
+                // Get the text to show on the message from resources
+                val errorMessageText: String = stringResource(errorMessage.messageId)
+                val retryMessageText = stringResource(id = R.string.retry)
+
+                // If onRefreshPosts or onErrorDismiss change while the LaunchedEffect is running,
+                // don't restart the effect and use the latest lambda values.
+                val onRefreshPostsState by rememberUpdatedState(onRefreshPosts)
+                val onErrorDismissState by rememberUpdatedState(onErrorDismiss)
+
+                // Effect running in a coroutine that displays the Snackbar on the screen
+                // If there's a change to errorMessageText, retryMessageText or scaffoldState,
+                // the previous effect will be cancelled and a new one will start with the new values
+                LaunchedEffect(errorMessageText, retryMessageText, scaffoldState) {
+                    val snackbarResult = scaffoldState.snackbarHostState.showSnackbar(
+                        message = errorMessageText,
+                        actionLabel = retryMessageText
+                    )
+                    if (snackbarResult == SnackbarResult.ActionPerformed) {
+                        onRefreshPostsState()
+                    }
+                    // Once the message is displayed and dismissed, notify the ViewModel
+                    onErrorDismissState(errorMessage.id)
+                }
+            }
+        } else {
+            val selectedPost = uiState.posts.find { it.id == uiState.selectedPostId }
+
+            if (selectedPost != null) {
+                val lazyListState = detailLazyListStates.getValue(selectedPost.id)
+
+                ArticleScreen(
+                    post = selectedPost,
+                    onBack = onInteractWithList,
+                    isFavorite = uiState.favorites.contains(selectedPost.id),
+                    onToggleFavorite = {
+                        onToggleFavorite(selectedPost.id)
+                    },
+                    lazyListState = lazyListState,
+                )
+
+                // If we are just showing the detail, have a back press switch to the list.
+                if (!useListDetail) {
+                    BackHandler {
+                        onInteractWithList()
+                    }
+                }
+            } else {
+                // TODO: Improve UX
+                LaunchedEffect(Unit) {
+                    onInteractWithList()
+                }
+            }
         }
     }
 }
@@ -259,7 +302,7 @@ private fun LoadingContent(
  * @param isShowingErrors (state) whether the screen is showing errors or not
  * @param favorites (state) all favorites
  * @param onRefresh (event) request to refresh data
- * @param navigateToArticle (event) request navigation to Article screen
+ * @param navigateToExpandedArticle (event) request navigation to Article screen
  * @param onToggleFavorite (event) request a single favorite be toggled
  * @param modifier modifier for root element
  */
@@ -272,23 +315,15 @@ private fun HomeScreenErrorAndContent(
     isShowingErrors: Boolean,
     favorites: Set<String>,
     onRefresh: () -> Unit,
-    navigateToArticle: (String) -> Unit,
+    navigateToExpandedArticle: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onSelectPost: (String) -> Unit,
     onInteractWithList: () -> Unit,
-    onInteractWithDetail: () -> Unit,
+    onInteractWithDetail: (String) -> Unit,
+    listLazyListState: LazyListState,
+    detailLazyListStates: Map<String, LazyListState>,
     modifier: Modifier = Modifier
 ) {
-    // Construct the lazy list states for the list and the details outside of deciding which one to show.
-    // This allows the associated state to survive beyond that decision, and therefore we get to preserve the scroll
-    // throughout any changes to the content.
-    val listLazyListState = rememberLazyListState()
-    val detailLazyListsStates = posts.associate { post ->
-        key(post.id) {
-            post.id to rememberLazyListState()
-        }
-    }
-
     if (posts.isNotEmpty()) {
         val detailPost by derivedStateOf {
             // TODO: Restructure the posts data to remove the magic 3 as a default
@@ -299,7 +334,7 @@ private fun HomeScreenErrorAndContent(
             if (useListDetail || lastInteractedWithList) {
                 PostList(
                     posts = posts,
-                    onArticleTapped = if (useListDetail) onSelectPost else navigateToArticle,
+                    onArticleTapped = onSelectPost,
                     favorites = favorites,
                     onToggleFavorite = onToggleFavorite,
                     contentPadding = rememberInsetsPaddingValues(
@@ -326,43 +361,34 @@ private fun HomeScreenErrorAndContent(
                     state = listLazyListState
                 )
             }
-            if (useListDetail || !lastInteractedWithList) {
-                // Crossfade between different detail posts
-                Crossfade(targetState = detailPost) { detailPost ->
-                    // Get the lazy list state for this detail view
-                    val detailLazyListState by derivedStateOf {
-                        detailLazyListsStates.getValue(detailPost.id)
-                    }
-
-                    // Key against the post id to avoid sharing any state between different posts
-                    key(detailPost.id) {
-                        PostContent(
-                            post = detailPost,
-                            modifier = modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    while (currentCoroutineContext().isActive) {
-                                        awaitPointerEventScope {
-                                            awaitPointerEvent(PointerEventPass.Initial)
-                                            onInteractWithDetail()
-                                        }
-                                    }
-                                },
-                            contentPadding = rememberInsetsPaddingValues(
-                                insets = LocalWindowInsets.current.systemBars,
-                                applyTop = false,
-                                applyStart = !useListDetail,
-                            ),
-                            state = detailLazyListState
-                        )
-                    }
+            // Crossfade between different detail posts
+            Crossfade(targetState = detailPost) { detailPost ->
+                // Get the lazy list state for this detail view
+                val detailLazyListState by derivedStateOf {
+                    detailLazyListStates.getValue(detailPost.id)
                 }
 
-                // If we are just showing the detail, have a back press switch to the list.
-                if (!useListDetail) {
-                    BackHandler {
-                        onInteractWithList()
-                    }
+                // Key against the post id to avoid sharing any state between different posts
+                key(detailPost.id) {
+                    PostContent(
+                        post = detailPost,
+                        modifier = modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                while (currentCoroutineContext().isActive) {
+                                    awaitPointerEventScope {
+                                        awaitPointerEvent(PointerEventPass.Initial)
+                                        onInteractWithDetail(detailPost.id)
+                                    }
+                                }
+                            },
+                        contentPadding = rememberInsetsPaddingValues(
+                            insets = LocalWindowInsets.current.systemBars,
+                            applyTop = false,
+                            applyStart = !useListDetail,
+                        ),
+                        state = detailLazyListState
+                    )
                 }
             }
         }
@@ -552,7 +578,7 @@ fun PreviewHomeScreen() {
             onErrorDismiss = { /*TODO*/ },
             onInteractWithList = { /*TODO*/ },
             onInteractWithDetail = { /*TODO*/ },
-            navigateToArticle = { /*TODO*/ },
+            navigateToExpandedArticle = { /*TODO*/ },
             openDrawer = { /*TODO*/ },
             scaffoldState = rememberScaffoldState()
         )

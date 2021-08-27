@@ -68,7 +68,7 @@ fun JetnewsNavGraph(
             )
             HomeScreen(
                 homeViewModel = homeViewModel,
-                navigateToArticle = actions.navigateToArticle,
+                navigateToExpandedArticle = actions.navigateToArticle,
                 openDrawer = openDrawer
             )
         }

@@ -109,10 +109,8 @@ class HomeViewModel(
      * Selects the given article to view more information about it.
      */
     fun selectArticle(postId: String) {
-        _uiState.update { it.copy(selectedPostId = postId) }
-
-        // Treat selecting a detail as interacting with it
-        interactedWithDetail()
+        // Treat selecting a detail as simply interacting with it
+        interactedWithDetail(postId)
     }
 
     /**
@@ -131,9 +129,12 @@ class HomeViewModel(
         }
     }
 
-    fun interactedWithDetail() {
+    fun interactedWithDetail(postId: String) {
         _uiState.update {
-            it.copy(lastInteractedWithList = false)
+            it.copy(
+                selectedPostId = postId,
+                lastInteractedWithList = false
+            )
         }
     }
 

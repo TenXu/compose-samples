@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.AlertDialog
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
@@ -109,7 +111,8 @@ fun ArticleScreen(
     post: Post,
     onBack: () -> Unit,
     isFavorite: Boolean,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    lazyListState: LazyListState = rememberLazyListState()
 ) {
 
     var showDialog by rememberSaveable { mutableStateOf(false) }
@@ -154,7 +157,8 @@ fun ArticleScreen(
                 // offset content in landscape mode to account for the navigation bar
                 .navigationBarsPadding(bottom = false)
                 // center content in landscape mode
-                .supportWideScreen()
+                .supportWideScreen(),
+            state = lazyListState,
         )
     }
 }
@@ -168,7 +172,7 @@ fun ArticleScreen(
  * @param onToggleFavorite (event) request this post toggle it's favorite status
  */
 @Composable
-private fun BottomBar(
+fun BottomBar(
     post: Post,
     onUnimplementedAction: () -> Unit,
     isFavorite: Boolean,
